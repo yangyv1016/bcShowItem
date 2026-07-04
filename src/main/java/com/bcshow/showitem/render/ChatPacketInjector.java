@@ -35,6 +35,21 @@ public final class ChatPacketInjector extends PacketAdapter {
     private final ItemHoverRenderer renderer;
     private final GsonComponentSerializer gson = GsonComponentSerializer.gson();
 
+    /**
+     * 递归防护标记。
+     *
+     * <p>本注入器的还原策略是「取消原包 + 用 Paper 原生 {@code sendMessage} 重发渲染结果」。
+     * 但 {@code sendMessage} 会在<b>同一 netty 线程同步</b>产生一个新的 {@code SYSTEM_CHAT}
+     * 出站包，再次进入本监听器。渲染结果此时已带 {@code SHOW_ITEM} hover，若对它调用
+     * ProtocolLib 的 {@link WrappedChatComponent#getJson()} 去序列化，会踩中 Paper 1.21.11 上
+     * 那个未初始化的物品 codec（{@code PARTIAL_RESULT_MESSAGE_ACCESSOR} 为 null）而抛异常刷屏。</p>
+     *
+     * <p>因 {@code sendMessage} 是同线程同步调用，用 {@link ThreadLocal} 在重发期间置位、
+     * 让重入的那一次在读 JSON 之前直接放行即可：渲染结果交由 Paper 原生管线发出，
+     * 原生编码器能正确处理 item hover，所有物品都能正常显示。</p>
+     */
+    private static final ThreadLocal<Boolean> RESENDING = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
     private ChatPacketInjector(final Plugin plugin, final ItemHoverRenderer renderer) {
         super(plugin, ListenerPriority.HIGH,
                 PacketType.Play.Server.SYSTEM_CHAT,
@@ -81,6 +96,11 @@ public final class ChatPacketInjector extends PacketAdapter {
      * {@link ItemTokenCodec#mayContainToken} 会放行，不会递归拦截。</p>
      */
     private void processComponentSlot(final PacketEvent event) {
+        // 本插件重发渲染结果时同步触发的重入包：直接放行，交给 Paper 原生管线发出，
+        // 不去读它的 JSON（避免踩 ProtocolLib 在 1.21.11 上损坏的物品 codec）。
+        if (RESENDING.get()) {
+            return;
+        }
         final PacketContainer packet = event.getPacket();
         if (packet.getChatComponents().size() == 0) {
             return;
@@ -104,10 +124,15 @@ public final class ChatPacketInjector extends PacketAdapter {
                 && Boolean.TRUE.equals(packet.getBooleans().readSafely(0));
 
         event.setCancelled(true);
-        if (overlay) {
-            receiver.sendActionBar(rendered);
-        } else {
-            receiver.sendMessage(rendered);
+        RESENDING.set(Boolean.TRUE);
+        try {
+            if (overlay) {
+                receiver.sendActionBar(rendered);
+            } else {
+                receiver.sendMessage(rendered);
+            }
+        } finally {
+            RESENDING.set(Boolean.FALSE);
         }
     }
 }
