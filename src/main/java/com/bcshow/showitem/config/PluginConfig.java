@@ -16,6 +16,30 @@ import org.bukkit.configuration.file.FileConfiguration;
  */
 public final class PluginConfig {
 
+    /** 悬停内容模式。 */
+    public enum HoverMode {
+        /**
+         * 自动降级链（默认）：完整 NBT 装得下就用；超预算退到「名字 + lore」文本 hover；
+         * 仍超预算才退到纯文本。既尽量保留最丰富的悬停，又绝不因体积踢人。
+         */
+        AUTO,
+        /** 强制携带完整物品 NBT，超预算直接降级纯文本（不退到 text 档）。 */
+        FULL,
+        /** 强制仅携带物品名 + lore 文本的 SHOW_TEXT hover（体积小，适合大 NBT 服）。 */
+        TEXT;
+
+        static HoverMode of(final String raw) {
+            if (raw == null) {
+                return AUTO;
+            }
+            return switch (raw.trim().toLowerCase()) {
+                case "full", "item", "nbt" -> FULL;
+                case "text", "lore", "name" -> TEXT;
+                default -> AUTO;
+            };
+        }
+    }
+
     /** 触发的槽位为空时的处理策略。 */
     public enum EmptySlotAction {
         /** 原样保留触发符文本（如 {@code %i}），当作普通聊天内容。默认。 */
@@ -42,6 +66,7 @@ public final class PluginConfig {
     private final boolean hotbarEnabled;
     private final boolean slotSyntaxEnabled;
     private final String displayFormat;
+    private final HoverMode hoverMode;
     private final EmptySlotAction emptySlotAction;
     private final String emptySlotText;
     private final int maxItemsPerMessage;
@@ -51,7 +76,7 @@ public final class PluginConfig {
     private final boolean debug;
 
     private PluginConfig(final String triggerPrefix, final String triggerSuffix, final boolean hotbarEnabled,
-                         final boolean slotSyntaxEnabled, final String displayFormat,
+                         final boolean slotSyntaxEnabled, final String displayFormat, final HoverMode hoverMode,
                          final EmptySlotAction emptySlotAction, final String emptySlotText,
                          final int maxItemsPerMessage, final int maxItemWireBytes, final int maxMessageWireBytes,
                          final boolean showAmountSuffix, final boolean debug) {
@@ -60,6 +85,7 @@ public final class PluginConfig {
         this.hotbarEnabled = hotbarEnabled;
         this.slotSyntaxEnabled = slotSyntaxEnabled;
         this.displayFormat = displayFormat;
+        this.hoverMode = hoverMode;
         this.emptySlotAction = emptySlotAction;
         this.emptySlotText = emptySlotText;
         this.maxItemsPerMessage = maxItemsPerMessage;
@@ -83,6 +109,7 @@ public final class PluginConfig {
                 config.getBoolean("hotbar-enabled", true),
                 config.getBoolean("slot-syntax-enabled", true),
                 config.getString("display-format", "&b[{name}]&r"),
+                HoverMode.of(config.getString("hover-mode", "auto")),
                 EmptySlotAction.of(config.getString("empty-slot-action", "keep")),
                 config.getString("empty-slot-text", "&7[空]"),
                 Math.max(1, config.getInt("max-items-per-message", 5)),
@@ -150,6 +177,10 @@ public final class PluginConfig {
 
     public String displayFormat() {
         return displayFormat;
+    }
+
+    public HoverMode hoverMode() {
+        return hoverMode;
     }
 
     public EmptySlotAction emptySlotAction() {

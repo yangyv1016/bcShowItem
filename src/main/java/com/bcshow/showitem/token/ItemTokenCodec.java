@@ -1,8 +1,11 @@
 package com.bcshow.showitem.token;
 
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.bukkit.inventory.ItemStack;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.zip.Deflater;
@@ -42,51 +45,96 @@ public final class ItemTokenCodec {
             SENTINEL_START + "(.*?)" + SENTINEL_MID
                     + "([\u200B\u200C\u200D\uFEFF]*)" + SENTINEL_END);
 
+    /** 零宽数据首字节：完整物品 NBT 模式，接收端还原 ItemStack 并用原生 hover。 */
+    public static final byte MODE_ITEM = 0x00;
+    /** 零宽数据首字节：文本 hover 模式，payload 为已构建组件的 JSON（名字 + lore）。 */
+    public static final byte MODE_TEXT = 0x01;
+
+    private static final GsonComponentSerializer GSON = GsonComponentSerializer.gson();
+
     private ItemTokenCodec() {
     }
 
+    /** 解码后的 token 载荷：按模式二选一，另一个为 null。 */
+    public record Payload(byte mode, ItemStack item, Component component) {
+    }
+
     /**
-     * 组装 token。
+     * 编码结果：token 文本 + 其在网络线路上占用的字节数。
+     *
+     * <p>两者由同一次压缩产出，避免「先估算再编码」重复压缩。wireBytes 用于体积预算判断：
+     * 压缩后含模式头共 {@code F} 字节 → 零宽字符 {@code 4F} → UTF-8 线路 {@code 12F} 字节。
+     * 哨兵与可见回退名相对极小，此处忽略。</p>
+     */
+    public record Encoded(String token, int wireBytes) {
+    }
+
+    /**
+     * 组装「完整物品」模式 token（携带整个 NBT，接收端复用客户端原生 tooltip）。
      *
      * @param visibleFallback 未装插件方可见的纯文本回退（如 {@code [钻石剑]}），不应含哨兵字符
      * @param item            要嵌入的物品
-     * @return token 字符串
      */
-    public static String encode(final String visibleFallback, final ItemStack item) {
-        final String zw = ZeroWidthCodec.encode(deflate(item.serializeAsBytes()));
-        return SENTINEL_START + visibleFallback + SENTINEL_MID + zw + SENTINEL_END;
+    public static Encoded encodeItem(final String visibleFallback, final ItemStack item) {
+        return frame(visibleFallback, MODE_ITEM, deflate(item.serializeAsBytes()));
     }
 
     /**
-     * 估算某物品编入 token 后在网络线路上占用的字节数（用于体积上限判断）。
+     * 组装「文本 hover」模式 token：payload 仅为最终显示组件（含名字 + lore 的 showText hover）
+     * 的 JSON。数据量远小于完整 NBT，大 NBT 物品也能稳定携带。
      *
-     * <p>膨胀链：压缩后字节数 {@code C} → 零宽字符 {@code 4C}（每字节 4 字符）→ UTF-8
-     * 线路字节 {@code 12C}（每个零宽码点 3 字节）。哨兵与可见回退名相对极小，此处忽略。</p>
+     * @param visibleFallback 未装插件方可见的纯文本回退
+     * @param rendered        已构建好的最终组件（[物品名] + showText hover）
      */
-    public static int estimateWireBytes(final ItemStack item) {
-        return deflate(item.serializeAsBytes()).length * 12;
+    public static Encoded encodeText(final String visibleFallback, final Component rendered) {
+        final byte[] json = GSON.serialize(rendered).getBytes(StandardCharsets.UTF_8);
+        return frame(visibleFallback, MODE_TEXT, deflate(json));
+    }
+
+    /** 把压缩后的 body 加上模式头、零宽编码、包上哨兵，并算出线路字节。 */
+    private static Encoded frame(final String visibleFallback, final byte mode, final byte[] compressedBody) {
+        final byte[] framed = withMode(mode, compressedBody);
+        final String zw = ZeroWidthCodec.encode(framed);
+        final String token = SENTINEL_START + visibleFallback + SENTINEL_MID + zw + SENTINEL_END;
+        return new Encoded(token, framed.length * 12);
     }
 
     /**
-     * 把 token 的零宽数据段还原为物品。
+     * 还原 token 的零宽数据段。按首字节模式分派：
+     * item 模式还原 {@link ItemStack}，text 模式还原 {@link Component}。
      *
      * @param zwPayload {@link #TOKEN_PATTERN} 捕获组 2
-     * @return 还原成功返回物品，数据损坏返回空
+     * @return 还原成功返回载荷，数据损坏返回空
      */
-    public static Optional<ItemStack> decode(final String zwPayload) {
+    public static Optional<Payload> decode(final String zwPayload) {
         try {
             final byte[] compressed = ZeroWidthCodec.decode(zwPayload);
             if (compressed == null) {
                 return Optional.empty();
             }
-            final byte[] bytes = inflate(compressed);
-            if (bytes == null) {
+            final byte[] framed = inflate(compressed);
+            if (framed == null || framed.length < 1) {
                 return Optional.empty();
             }
-            return Optional.of(ItemStack.deserializeBytes(bytes));
+            final byte mode = framed[0];
+            final byte[] body = new byte[framed.length - 1];
+            System.arraycopy(framed, 1, body, 0, body.length);
+            if (mode == MODE_TEXT) {
+                final Component c = GSON.deserialize(new String(body, StandardCharsets.UTF_8));
+                return Optional.of(new Payload(MODE_TEXT, null, c));
+            }
+            return Optional.of(new Payload(MODE_ITEM, ItemStack.deserializeBytes(body), null));
         } catch (final Exception ex) {
             return Optional.empty();
         }
+    }
+
+    /** 在数据前置一个模式标志字节。 */
+    private static byte[] withMode(final byte mode, final byte[] body) {
+        final byte[] out = new byte[body.length + 1];
+        out[0] = mode;
+        System.arraycopy(body, 0, out, 1, body.length);
+        return out;
     }
 
     /**

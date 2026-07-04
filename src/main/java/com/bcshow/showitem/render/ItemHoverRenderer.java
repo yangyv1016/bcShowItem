@@ -37,13 +37,23 @@ public final class ItemHoverRenderer {
 
     /**
      * 根据 token 的零宽数据段构造替换组件。解码失败时回退为空白，避免残留哨兵。
+     *
+     * <p>按 token 模式分派：
+     * <ul>
+     *   <li>{@code MODE_TEXT}：payload 已是构建好的最终组件（名字 + showText hover），直接用。</li>
+     *   <li>{@code MODE_ITEM}：payload 为物品，重建 [物品名] 并附加原生 SHOW_ITEM hover。</li>
+     * </ul></p>
      */
     private ComponentLike buildReplacement(final String zwPayload) {
-        final Optional<ItemStack> decoded = ItemTokenCodec.decode(zwPayload);
+        final Optional<ItemTokenCodec.Payload> decoded = ItemTokenCodec.decode(zwPayload);
         if (decoded.isEmpty()) {
             return Component.empty();
         }
-        final ItemStack item = decoded.get();
+        final ItemTokenCodec.Payload payload = decoded.get();
+        if (payload.mode() == ItemTokenCodec.MODE_TEXT) {
+            return payload.component();
+        }
+        final ItemStack item = payload.item();
         final PluginConfig config = configSupplier.get();
         // 用组件版格式化：保留物品名的可翻译组件，客户端按语言本地化显示（不锁死英文）
         return ItemDisplay.formatComponent(item, config)

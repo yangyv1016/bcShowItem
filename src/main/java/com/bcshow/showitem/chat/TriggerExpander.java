@@ -4,6 +4,7 @@ import com.bcshow.showitem.config.PluginConfig;
 import com.bcshow.showitem.item.ItemDisplay;
 import com.bcshow.showitem.item.SlotSelector;
 import com.bcshow.showitem.token.ItemTokenCodec;
+import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
@@ -161,14 +162,36 @@ public final class TriggerExpander {
             };
             return new Rendered(text, 0, false);
         }
-        final int wire = ItemTokenCodec.estimateWireBytes(item);
         final String fallback = ItemDisplay.plainFallback(item, config);
-        // 超单物品上限，或超出本条消息剩余总预算：降级为纯文本（无 hover），
-        // 但绝不产生会撑爆 32767 字节包上限的零宽数据。
-        if (wire > config.maxItemWireBytes() || wire > remainingWireBudget) {
-            return new Rendered(fallback, 0, false);
+        final int budget = Math.min(config.maxItemWireBytes(), remainingWireBudget);
+
+        // 按 hover-mode 决定尝试哪些编码档位，逐档尝试，取第一个装得下预算的：
+        //   FULL 档 -> 完整 NBT，复用客户端原生 tooltip（信息最全）
+        //   TEXT 档 -> 仅「物品名 + lore」文本 hover（体积小，大 NBT 也稳）
+        //   都装不下 -> 纯文本 [物品名]（无 hover），绝不撑爆数据包
+        final PluginConfig.HoverMode mode = config.hoverMode();
+
+        if (mode != PluginConfig.HoverMode.TEXT) {
+            final ItemTokenCodec.Encoded full = ItemTokenCodec.encodeItem(fallback, item);
+            if (full.wireBytes() <= budget) {
+                return new Rendered(full.token(), full.wireBytes(), true);
+            }
+            // FULL 强制档：装不下直接降级纯文本，不退到 TEXT
+            if (mode == PluginConfig.HoverMode.FULL) {
+                return new Rendered(fallback, 0, false);
+            }
         }
-        return new Rendered(ItemTokenCodec.encode(fallback, item), wire, true);
+
+        if (mode != PluginConfig.HoverMode.FULL) {
+            final Component rendered = ItemDisplay.formatComponent(item, config)
+                    .hoverEvent(ItemDisplay.hoverText(item, config).asHoverEvent());
+            final ItemTokenCodec.Encoded text = ItemTokenCodec.encodeText(fallback, rendered);
+            if (text.wireBytes() <= budget) {
+                return new Rendered(text.token(), text.wireBytes(), true);
+            }
+        }
+
+        return new Rendered(fallback, 0, false);
     }
 
     /**

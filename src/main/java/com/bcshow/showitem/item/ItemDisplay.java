@@ -11,6 +11,7 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -59,6 +60,30 @@ public final class ItemDisplay {
                 .append(LEGACY.deserialize(before))
                 .append(name)
                 .append(LEGACY.deserialize(after));
+    }
+
+    /**
+     * 生成「物品名 + lore（介绍）」的悬停文本组件，供 SHOW_TEXT hover 使用。
+     *
+     * <p>相比 SHOW_ITEM 携带完整 NBT，此处仅取名字与 lore 文本，数据量小得多，
+     * 大 NBT 物品也能稳定携带而不触发体积降级。名字与 lore 均保留可翻译组件，
+     * 跨服仍按客户端语言本地化。</p>
+     *
+     * <p>首行为物品名（继承其原有稀有度颜色），其后逐行追加 lore。</p>
+     */
+    public static Component hoverText(final ItemStack item, final PluginConfig config) {
+        Component name = item.effectiveName();
+        if (config.showAmountSuffix() && item.getAmount() > 1) {
+            name = Component.empty().append(name).append(Component.text(" x" + item.getAmount()));
+        }
+        Component hover = name;
+        final List<Component> lore = item.lore();
+        if (lore != null) {
+            for (final Component line : lore) {
+                hover = hover.append(Component.newline()).append(line);
+            }
+        }
+        return hover;
     }
 
     /**
