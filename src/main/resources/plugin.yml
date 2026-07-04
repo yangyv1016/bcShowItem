@@ -1,0 +1,23 @@
+name: BcShowItem
+version: '${project.version}'
+main: com.bcshow.showitem.BcShowItemPlugin
+api-version: '1.21'
+author: bcShow
+description: Embed inventory items into VentureChat messages via %i.
+depend:
+  - ProtocolLib
+softdepend:
+  - VentureChat
+permissions:
+  bcshowitem.use:
+    description: Allows a player to embed items in chat via %i.
+    default: true
+  bcshowitem.reload:
+    description: Allows reloading the BcShowItem configuration.
+    default: op
+commands:
+  bcshowitem:
+    description: BcShowItem admin command.
+    usage: /bcshowitem reload
+    aliases: [bcsi]
+    permission: bcshowitem.reload
