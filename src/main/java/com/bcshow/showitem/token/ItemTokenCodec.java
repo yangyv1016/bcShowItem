@@ -108,17 +108,20 @@ public final class ItemTokenCodec {
      */
     public static Optional<Payload> decode(final String zwPayload) {
         try {
-            final byte[] compressed = ZeroWidthCodec.decode(zwPayload);
-            if (compressed == null) {
-                return Optional.empty();
-            }
-            final byte[] framed = inflate(compressed);
+            // 与 frame() 严格对称：zerowidth 解出 [mode 字节] ++ 压缩体，
+            // 先剥离 mode 字节，再对「其后的压缩体」inflate。mode 字节不参与压缩，
+            // 若先 inflate 整段会把 mode 前缀当成 zlib 头的一部分而解压失败。
+            final byte[] framed = ZeroWidthCodec.decode(zwPayload);
             if (framed == null || framed.length < 1) {
                 return Optional.empty();
             }
             final byte mode = framed[0];
-            final byte[] body = new byte[framed.length - 1];
-            System.arraycopy(framed, 1, body, 0, body.length);
+            final byte[] compressedBody = new byte[framed.length - 1];
+            System.arraycopy(framed, 1, compressedBody, 0, compressedBody.length);
+            final byte[] body = inflate(compressedBody);
+            if (body == null) {
+                return Optional.empty();
+            }
             if (mode == MODE_TEXT) {
                 final Component c = GSON.deserialize(new String(body, StandardCharsets.UTF_8));
                 return Optional.of(new Payload(MODE_TEXT, null, c));
