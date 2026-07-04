@@ -27,7 +27,16 @@ jobs:
           cache: maven
 
       - name: Build with Maven
-        run: mvn -B clean package
+        env:
+          # tag 触发时把 tag 名（如 v1.0.4，去掉前缀 v）作为版本传给构建，使 jar 名随版本更新；
+          # 非 tag 触发时该变量为空，构建回退到 pom.xml 里的默认 revision。
+          PLUGIN_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: |
+          if [ -n "$PLUGIN_VERSION" ]; then
+            mvn -B clean package -Drevision="${PLUGIN_VERSION#v}"
+          else
+            mvn -B clean package
+          fi
 
       - name: Verify jar
         run: ls -lh target/*.jar
