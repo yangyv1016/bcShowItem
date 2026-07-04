@@ -43,8 +43,11 @@ public enum EquipmentSlotType {
     /**
      * 该槽位在玩家背包窗口中的槽位号（供镜像回查）。
      *
-     * <p>{@link #HAND} 是动态槽：主手随快捷栏选中格移动，窗口槽位 = {@code 36 + 当前选中格}，
-     * 故需玩家上下文实时计算；其余为固定槽位。</p>
+     * <p>{@link #HAND} 是动态槽：主手随快捷栏选中格移动，窗口槽位 = {@code 36 + 当前选中格}。
+     * 注意 {@code %i} 的实际取物路径由 {@code SlotSelector} 用「异步安全的实时手持格」接管
+     * （见 {@code InventoryMirrorService#heldSlot}），此处 HAND 分支用的
+     * {@code getHeldItemSlot()} 在异步聊天线程可能落后一 tick，仅作 API 保底、不在主路径生效。
+     * 其余为固定槽位。</p>
      */
     public int windowSlot(final Player player) {
         if (this == HAND) {

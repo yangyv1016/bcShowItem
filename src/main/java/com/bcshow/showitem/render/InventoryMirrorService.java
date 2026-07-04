@@ -39,6 +39,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>取物时 {@code %i} 优先查镜像（所见即所得），未命中回退 {@code getInventory().getItem()}，
  * 因此该服务是纯增强、可缺省，不改变无附魔插件时的行为。</p>
+ *
+ * <p><b>额外职责：实时手持格</b>。{@code AsyncPlayerChatEvent} 在<b>异步线程</b>触发，而
+ * {@code player.getInventory().getHeldItemSlot()} 由<b>主线程</b>处理换手包时才更新。玩家滚轮
+ * 换格后立刻回车，换手包可能尚未被主线程应用，异步聊天线程读到的是上一格，导致 {@code %i}
+ * 偶发展示错格。故本服务顺带以 {@link ListenerPriority#MONITOR} 拦截<b>入站</b>
+ * {@code HELD_ITEM_SLOT} 包——它与 CHAT 包同一 TCP 顺序、严格早于聊天异步处理——按 netty
+ * 到达顺序实时记录手持格号，作为异步安全的权威源（见 {@link #heldSlot}）。</p>
  */
 public final class InventoryMirrorService extends PacketAdapter implements Listener {
 
@@ -50,11 +57,14 @@ public final class InventoryMirrorService extends PacketAdapter implements Liste
     private static final int WINDOW_SLOTS = 46;
 
     private final Map<UUID, ItemStack[]> mirror = new ConcurrentHashMap<>();
+    /** 按 netty 入站顺序记录的玩家实时手持格号（0..8），供异步聊天线程读取。 */
+    private final Map<UUID, Integer> heldSlot = new ConcurrentHashMap<>();
 
     private InventoryMirrorService(final Plugin plugin) {
         super(plugin, ListenerPriority.MONITOR,
                 PacketType.Play.Server.WINDOW_ITEMS,
-                PacketType.Play.Server.SET_SLOT);
+                PacketType.Play.Server.SET_SLOT,
+                PacketType.Play.Client.HELD_ITEM_SLOT);
     }
 
     /** 注册 ProtocolLib 拦截与 Bukkit 退出清理。 */
@@ -73,6 +83,7 @@ public final class InventoryMirrorService extends PacketAdapter implements Liste
         }
         HandlerList.unregisterAll(this);
         mirror.clear();
+        heldSlot.clear();
     }
 
     /**
@@ -88,6 +99,35 @@ public final class InventoryMirrorService extends PacketAdapter implements Liste
             return null;
         }
         return slots[windowSlot];
+    }
+
+    /**
+     * 玩家实时手持格号（0..8），来源为按 netty 入站顺序记录的换手包，异步安全。
+     *
+     * @param player 玩家
+     * @return 已记录返回该格号；从未收到换手包（如刚进服未换过格）返回 null，调用方回退
+     *         {@code player.getInventory().getHeldItemSlot()}
+     */
+    public Integer heldSlot(final Player player) {
+        return heldSlot.get(player.getUniqueId());
+    }
+
+    @Override
+    public void onPacketReceiving(final PacketEvent event) {
+        try {
+            if (event.getPacketType() != PacketType.Play.Client.HELD_ITEM_SLOT
+                    || !(event.getPlayer() instanceof Player sender)) {
+                return;
+            }
+            // 客户端换手包携带目标快捷栏格号（0..8）。按到达顺序即时落库，
+            // 与后续 CHAT 包同一 TCP 序，聊天异步线程读到的必是最新格。
+            final int slot = event.getPacket().getIntegers().readSafely(0);
+            if (slot >= 0 && slot <= 8) {
+                heldSlot.put(sender.getUniqueId(), slot);
+            }
+        } catch (final Exception ignored) {
+            // 纯增强：解析异常静默跳过，取物会回退 getHeldItemSlot()
+        }
     }
 
     @Override
@@ -156,5 +196,6 @@ public final class InventoryMirrorService extends PacketAdapter implements Liste
     @EventHandler
     public void onQuit(final PlayerQuitEvent event) {
         mirror.remove(event.getPlayer().getUniqueId());
+        heldSlot.remove(event.getPlayer().getUniqueId());
     }
 }

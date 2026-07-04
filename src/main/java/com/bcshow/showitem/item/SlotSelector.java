@@ -32,9 +32,10 @@ public record SlotSelector(Function<Player, ItemStack> reader,
      * @param selector 选择器（大小写不敏感），null/空视为默认手持格
      * @return 解析成功返回选择器，无法识别返回空
      */
-    public static Optional<SlotSelector> parse(final String selector) {
+    public static Optional<SlotSelector> parse(final String selector,
+                                               final Function<Player, Integer> heldSlotProvider) {
         if (selector == null || selector.isEmpty()) {
-            return Optional.of(fromEquipment(EquipmentSlotType.DEFAULT));
+            return Optional.of(fromEquipment(EquipmentSlotType.DEFAULT, heldSlotProvider));
         }
 
         // 快捷栏数字格 1..9
@@ -50,10 +51,26 @@ public record SlotSelector(Function<Player, ItemStack> reader,
         }
 
         // 装备/手持关键字
-        return EquipmentSlotType.fromKeyword(selector).map(SlotSelector::fromEquipment);
+        return EquipmentSlotType.fromKeyword(selector)
+                .map(type -> fromEquipment(type, heldSlotProvider));
     }
 
-    private static SlotSelector fromEquipment(final EquipmentSlotType type) {
+    /**
+     * 由 selector 与「实时手持格来源」构造装备/手持选择器。
+     *
+     * <p>{@link EquipmentSlotType#HAND} 是<b>动态槽</b>：主手随快捷栏选中格移动。用注入的
+     * {@code heldSlotProvider}（异步安全的实时手持格，见 {@code InventoryMirrorService}）
+     * 现算窗口槽位与取物索引，替代由主线程延迟更新的 {@code getHeldItemSlot()}，
+     * 从而消除「换格后立刻发言展示错格」的异步竞态。其余装备槽为固定槽，走静态映射。</p>
+     */
+    private static SlotSelector fromEquipment(final EquipmentSlotType type,
+                                              final Function<Player, Integer> heldSlotProvider) {
+        if (type == EquipmentSlotType.HAND) {
+            return new SlotSelector(
+                    player -> player.getInventory().getItem(heldSlotProvider.apply(player)),
+                    player -> EquipmentSlotType.HOTBAR_WINDOW_BASE + heldSlotProvider.apply(player),
+                    "hand");
+        }
         return new SlotSelector(type::read, type::windowSlot,
                 type.name().toLowerCase(java.util.Locale.ROOT));
     }

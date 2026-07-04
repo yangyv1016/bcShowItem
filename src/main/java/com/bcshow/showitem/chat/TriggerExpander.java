@@ -79,7 +79,7 @@ public final class TriggerExpander {
                 continue;
             }
 
-            final Optional<SlotSelector> selector = SlotSelector.parse(parsed.selector());
+            final Optional<SlotSelector> selector = SlotSelector.parse(parsed.selector(), this::heldSlot);
             final boolean hotbarSelector = parsed.selector().length() == 1
                     && parsed.selector().charAt(0) >= '1' && parsed.selector().charAt(0) <= '9';
             if (selector.isEmpty() || (hotbarSelector && !config.hotbarEnabled())
@@ -242,6 +242,24 @@ public final class TriggerExpander {
             }
         }
         return slot.read(player);
+    }
+
+    /**
+     * 异步安全的玩家实时手持格号（0..8）。
+     *
+     * <p>{@code AsyncPlayerChatEvent} 在异步线程触发，而 {@code getHeldItemSlot()} 由主线程
+     * 处理换手包时才更新，玩家换格后立刻发言可能读到落后一 tick 的旧格。优先取镜像服务按
+     * netty 入站顺序记录的实时格号（与 CHAT 包同序，权威），未记录（如刚进服未换格）或镜像
+     * 缺省时回退 {@code getHeldItemSlot()}，行为与旧版一致。</p>
+     */
+    private int heldSlot(final Player player) {
+        if (mirror != null) {
+            final Integer live = mirror.heldSlot(player);
+            if (live != null) {
+                return live;
+            }
+        }
+        return player.getInventory().getHeldItemSlot();
     }
 
     private static boolean isEmpty(final ItemStack item) {
