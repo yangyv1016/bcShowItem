@@ -11,6 +11,7 @@ import com.comphenix.protocol.events.PacketEvent;
 import com.comphenix.protocol.wrappers.WrappedChatComponent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.util.logging.Level;
@@ -65,7 +66,7 @@ public final class ChatPacketInjector extends PacketAdapter {
     @Override
     public void onPacketSending(final PacketEvent event) {
         try {
-            processComponentSlot(event.getPacket());
+            processComponentSlot(event);
         } catch (final Exception ex) {
             plugin.getLogger().log(Level.WARNING, "[BcShowItem] Failed to process outbound chat packet", ex);
         }
@@ -73,8 +74,14 @@ public final class ChatPacketInjector extends PacketAdapter {
 
     /**
      * 处理包中的聊天组件槽位。SYSTEM_CHAT / CHAT 在 1.20.4+ 均把组件写在 chatComponents[0]。
+     *
+     * <p>写回策略：<b>不</b>用 {@code WrappedChatComponent.fromJson} 回写包——ProtocolLib 5.3.0
+     * 在 Paper 1.21.11 上该路径的 Mojang codec 反射字段未初始化会 NPE。改为取消原包、用 Paper
+     * 原生 Adventure 把渲染后的组件重发给接收者。重发组件已不含 token 哨兵，
+     * {@link ItemTokenCodec#mayContainToken} 会放行，不会递归拦截。</p>
      */
-    private void processComponentSlot(final PacketContainer packet) {
+    private void processComponentSlot(final PacketEvent event) {
+        final PacketContainer packet = event.getPacket();
         if (packet.getChatComponents().size() == 0) {
             return;
         }
@@ -86,8 +93,21 @@ public final class ChatPacketInjector extends PacketAdapter {
         if (json == null || !ItemTokenCodec.mayContainToken(json)) {
             return;
         }
-        final Component source = gson.deserialize(json);
-        final Component rendered = renderer.render(source);
-        packet.getChatComponents().write(0, WrappedChatComponent.fromJson(gson.serialize(rendered)));
+        if (!(event.getPlayer() instanceof Player receiver)) {
+            return;
+        }
+
+        final Component rendered = renderer.render(gson.deserialize(json));
+
+        // overlay=true 表示 actionbar 文本，不能当聊天发；此处仅接管聊天消息。
+        final boolean overlay = packet.getType() == PacketType.Play.Server.SYSTEM_CHAT
+                && Boolean.TRUE.equals(packet.getBooleans().readSafely(0));
+
+        event.setCancelled(true);
+        if (overlay) {
+            receiver.sendActionBar(rendered);
+        } else {
+            receiver.sendMessage(rendered);
+        }
     }
 }

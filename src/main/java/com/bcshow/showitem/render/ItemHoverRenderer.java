@@ -6,7 +6,6 @@ import com.bcshow.showitem.token.ItemTokenCodec;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.ComponentLike;
 import net.kyori.adventure.text.TextReplacementConfig;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.Optional;
@@ -46,8 +45,8 @@ public final class ItemHoverRenderer {
         }
         final ItemStack item = decoded.get();
         final PluginConfig config = configSupplier.get();
-        final String formatted = ItemDisplay.format(item, config);
-        return LegacyComponentSerializer.legacyAmpersand().deserialize(formatted)
+        // 用组件版格式化：保留物品名的可翻译组件，客户端按语言本地化显示（不锁死英文）
+        return ItemDisplay.formatComponent(item, config)
                 .hoverEvent(item.asHoverEvent());
     }
 }

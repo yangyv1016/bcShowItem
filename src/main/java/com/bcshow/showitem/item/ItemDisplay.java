@@ -1,8 +1,17 @@
 package com.bcshow.showitem.item;
 
 import com.bcshow.showitem.config.PluginConfig;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.Style;
+import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.inventory.ItemStack;
+
+import java.util.EnumSet;
+import java.util.Set;
 
 /**
  * 物品显示文本的单一生成源。发送端（生成可见回退纯文本）与渲染端（生成彩色组件）
@@ -10,7 +19,139 @@ import org.bukkit.inventory.ItemStack;
  */
 public final class ItemDisplay {
 
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
+    private static final String NAME_PLACEHOLDER = "{name}";
+
     private ItemDisplay() {
+    }
+
+    /**
+     * 按 {@code display-format} 生成物品的展示「组件」（供渲染端使用）。
+     *
+     * <p>关键点：物品名直接取 {@link ItemStack#effectiveName()}，它对原版物品是
+     * <b>可翻译组件</b>（翻译键 {@code item.minecraft.xxx}）。保留该组件、随聊天包以 JSON
+     * 下发，客户端才会按玩家语言本地化显示（中文客户端 → 中文物品名）。若像纯文本回退那样
+     * 提前用 {@link PlainTextComponentSerializer} 拍平，就会锁死成英文。</p>
+     *
+     * <p>{@code {name}} 处会插入名字组件，并继承格式串在该位置的激活颜色/样式；
+     * {@code {amount}}/{@code {type}} 为纯文本，直接替换。</p>
+     */
+    public static Component formatComponent(final ItemStack item, final PluginConfig config) {
+        final String format = config.displayFormat()
+                .replace("{amount}", String.valueOf(item.getAmount()))
+                .replace("{type}", item.getType().getKey().getKey());
+
+        final int idx = format.indexOf(NAME_PLACEHOLDER);
+        if (idx < 0) {
+            return LEGACY.deserialize(format);
+        }
+        final String before = format.substring(0, idx);
+        final String after = format.substring(idx + NAME_PLACEHOLDER.length());
+
+        Component name = item.effectiveName();
+        if (config.showAmountSuffix() && item.getAmount() > 1) {
+            name = Component.empty().append(name).append(Component.text(" x" + item.getAmount()));
+        }
+        // 让物品名继承 {name} 处的激活颜色/样式（仅在名字本身未显式设置时填充）
+        name = applyIfAbsent(name, activeStyleAt(before));
+
+        return Component.empty()
+                .append(LEGACY.deserialize(before))
+                .append(name)
+                .append(LEGACY.deserialize(after));
+    }
+
+    /**
+     * 扫描格式串（legacy {@code &} 码），计算末尾处的激活颜色与装饰。
+     * 遵循原版语义：颜色码会重置已有装饰，{@code &r} 重置全部。
+     */
+    private static Style activeStyleAt(final String s) {
+        TextColor color = null;
+        final Set<TextDecoration> decorations = EnumSet.noneOf(TextDecoration.class);
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) != '&' || i + 1 >= s.length()) {
+                continue;
+            }
+            final char code = s.charAt(i + 1);
+            if (code == '#' && i + 7 < s.length()) {
+                color = TextColor.fromHexString("#" + s.substring(i + 2, i + 8));
+                decorations.clear();
+                i += 7;
+            } else if (isColorCode(code)) {
+                color = colorOf(code);
+                decorations.clear();
+                i += 1;
+            } else if (code == 'r' || code == 'R') {
+                color = null;
+                decorations.clear();
+                i += 1;
+            } else {
+                final TextDecoration deco = decorationOf(code);
+                if (deco != null) {
+                    decorations.add(deco);
+                }
+                i += 1;
+            }
+        }
+        Style.Builder style = Style.style();
+        if (color != null) {
+            style = style.color(color);
+        }
+        for (final TextDecoration deco : decorations) {
+            style = style.decoration(deco, true);
+        }
+        return style.build();
+    }
+
+    /** 仅在物品名未显式设置该属性时才填充（保留自定义命名物品自身的颜色/斜体）。 */
+    private static Component applyIfAbsent(final Component name, final Style style) {
+        Component out = name;
+        if (style.color() != null) {
+            out = out.colorIfAbsent(style.color());
+        }
+        for (final TextDecoration deco : TextDecoration.values()) {
+            if (style.decoration(deco) == TextDecoration.State.TRUE) {
+                out = out.decorationIfAbsent(deco, TextDecoration.State.TRUE);
+            }
+        }
+        return out;
+    }
+
+    private static boolean isColorCode(final char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+    private static TextColor colorOf(final char code) {
+        return switch (Character.toLowerCase(code)) {
+            case '0' -> NamedTextColor.BLACK;
+            case '1' -> NamedTextColor.DARK_BLUE;
+            case '2' -> NamedTextColor.DARK_GREEN;
+            case '3' -> NamedTextColor.DARK_AQUA;
+            case '4' -> NamedTextColor.DARK_RED;
+            case '5' -> NamedTextColor.DARK_PURPLE;
+            case '6' -> NamedTextColor.GOLD;
+            case '7' -> NamedTextColor.GRAY;
+            case '8' -> NamedTextColor.DARK_GRAY;
+            case '9' -> NamedTextColor.BLUE;
+            case 'a' -> NamedTextColor.GREEN;
+            case 'b' -> NamedTextColor.AQUA;
+            case 'c' -> NamedTextColor.RED;
+            case 'd' -> NamedTextColor.LIGHT_PURPLE;
+            case 'e' -> NamedTextColor.YELLOW;
+            case 'f' -> NamedTextColor.WHITE;
+            default -> null;
+        };
+    }
+
+    private static TextDecoration decorationOf(final char code) {
+        return switch (Character.toLowerCase(code)) {
+            case 'k' -> TextDecoration.OBFUSCATED;
+            case 'l' -> TextDecoration.BOLD;
+            case 'm' -> TextDecoration.STRIKETHROUGH;
+            case 'n' -> TextDecoration.UNDERLINED;
+            case 'o' -> TextDecoration.ITALIC;
+            default -> null;
+        };
     }
 
     /**
