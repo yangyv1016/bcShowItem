@@ -1,5 +1,6 @@
 package com.bcshow.showitem.chat;
 
+import com.bcshow.showitem.cache.ItemCacheService;
 import com.bcshow.showitem.config.PluginConfig;
 import com.bcshow.showitem.item.ItemDisplay;
 import com.bcshow.showitem.item.SlotSelector;
@@ -28,9 +29,15 @@ import java.util.Optional;
 public final class TriggerExpander {
 
     private final PluginConfig config;
+    private final ItemCacheService cache;
 
-    public TriggerExpander(final PluginConfig config) {
+    /**
+     * @param config 配置快照
+     * @param cache  跨服缓存服务；为 null 时禁用 CACHE 档位（AUTO 链跳过它）
+     */
+    public TriggerExpander(final PluginConfig config, final ItemCacheService cache) {
         this.config = config;
+        this.cache = cache;
     }
 
     /** 展开结果：替换后的文本 + 实际生成的 token 数量。 */
@@ -165,10 +172,11 @@ public final class TriggerExpander {
         final String fallback = ItemDisplay.plainFallback(item, config);
         final int budget = Math.min(config.maxItemWireBytes(), remainingWireBudget);
 
-        // 按 hover-mode 决定尝试哪些编码档位，逐档尝试，取第一个装得下预算的：
-        //   FULL 档 -> 完整 NBT，复用客户端原生 tooltip（信息最全）
-        //   TEXT 档 -> 仅「物品名 + lore」文本 hover（体积小，大 NBT 也稳）
-        //   都装不下 -> 纯文本 [物品名]（无 hover），绝不撑爆数据包
+        // AUTO 降级链，逐档尝试取第一个装得下预算的：
+        //   FULL  档 -> 完整 NBT 内嵌消息，客户端原生 tooltip（信息最全，零竞态，最稳）
+        //   CACHE 档 -> 物品走独立通道 + 消息只带 8 字节引用 id，体积恒定不爆，大物品也能完整还原
+        //   TEXT  档 -> 仅「物品名 + lore」文本 hover（不依赖缓存通道）
+        //   都不行 -> 纯文本 [物品名]（无 hover），绝不撑爆数据包
         final PluginConfig.HoverMode mode = config.hoverMode();
 
         if (mode != PluginConfig.HoverMode.TEXT) {
@@ -176,9 +184,19 @@ public final class TriggerExpander {
             if (full.wireBytes() <= budget) {
                 return new Rendered(full.token(), full.wireBytes(), true);
             }
-            // FULL 强制档：装不下直接降级纯文本，不退到 TEXT
+            // FULL 强制档：装不下直接降级纯文本，不退到后续档位
             if (mode == PluginConfig.HoverMode.FULL) {
                 return new Rendered(fallback, 0, false);
+            }
+        }
+
+        // CACHE 档（仅 AUTO 且缓存服务可用）：把物品搬到独立通道，消息只带极短引用 id。
+        // 引用 token 体积恒定（约 108 线路字节），只要没被 maxItemWireBytes 卡到极低就装得下。
+        if (mode == PluginConfig.HoverMode.AUTO && cache != null && config.crossServerCache()) {
+            final long id = cache.store(player, item.serializeAsBytes());
+            final ItemTokenCodec.Encoded ref = ItemTokenCodec.encodeCacheRef(fallback, id);
+            if (ref.wireBytes() <= budget) {
+                return new Rendered(ref.token(), ref.wireBytes(), true);
             }
         }
 

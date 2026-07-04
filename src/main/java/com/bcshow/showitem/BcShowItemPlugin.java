@@ -1,5 +1,6 @@
 package com.bcshow.showitem;
 
+import com.bcshow.showitem.cache.ItemCacheService;
 import com.bcshow.showitem.chat.ChatCaptureListener;
 import com.bcshow.showitem.config.PluginConfig;
 import com.bcshow.showitem.render.ChatPacketInjector;
@@ -23,6 +24,7 @@ public final class BcShowItemPlugin extends JavaPlugin {
 
     private final AtomicReference<PluginConfig> config = new AtomicReference<>();
     private ChatPacketInjector injector;
+    private ItemCacheService cacheService;
 
     @Override
     public void onEnable() {
@@ -35,9 +37,13 @@ public final class BcShowItemPlugin extends JavaPlugin {
             return;
         }
 
-        getServer().getPluginManager().registerEvents(new ChatCaptureListener(config::get), this);
+        // 跨服物品缓存：走 Velocity 内置的 bungee 兼容 Forward 通道，代理端无需插件。
+        cacheService = new ItemCacheService(this, config::get);
+        cacheService.register();
 
-        final ItemHoverRenderer renderer = new ItemHoverRenderer(config::get);
+        getServer().getPluginManager().registerEvents(new ChatCaptureListener(config::get, cacheService), this);
+
+        final ItemHoverRenderer renderer = new ItemHoverRenderer(config::get, cacheService);
         injector = ChatPacketInjector.register(this, renderer);
 
         if (getServer().getPluginManager().getPlugin("VentureChat") == null) {
@@ -51,6 +57,10 @@ public final class BcShowItemPlugin extends JavaPlugin {
         if (injector != null) {
             injector.unregister();
             injector = null;
+        }
+        if (cacheService != null) {
+            cacheService.unregister();
+            cacheService = null;
         }
     }
 

@@ -49,14 +49,27 @@ public final class ItemTokenCodec {
     public static final byte MODE_ITEM = 0x00;
     /** 零宽数据首字节：文本 hover 模式，payload 为已构建组件的 JSON（名字 + lore）。 */
     public static final byte MODE_TEXT = 0x01;
+    /**
+     * 零宽数据首字节：跨服缓存引用模式。payload 仅为 8 字节内容哈希 id，
+     * 物品 NBT 走独立的插件消息通道传输、在接收端本地缓存中回查。消息体积恒定极小、
+     * 永不撑爆数据包，大物品也能还原完整 tooltip。见 {@code cache.ItemCacheService}。
+     */
+    public static final byte MODE_CACHE_REF = 0x02;
 
     private static final GsonComponentSerializer GSON = GsonComponentSerializer.gson();
 
     private ItemTokenCodec() {
     }
 
-    /** 解码后的 token 载荷：按模式二选一，另一个为 null。 */
-    public record Payload(byte mode, ItemStack item, Component component) {
+    /**
+     * 解码后的 token 载荷。按 {@code mode} 取对应字段，其余为 null/0：
+     * <ul>
+     *   <li>{@link #MODE_ITEM}：{@code item} 有效</li>
+     *   <li>{@link #MODE_TEXT}：{@code component} 有效</li>
+     *   <li>{@link #MODE_CACHE_REF}：{@code cacheId} 有效，需向缓存服务回查物品</li>
+     * </ul>
+     */
+    public record Payload(byte mode, ItemStack item, Component component, long cacheId) {
     }
 
     /**
@@ -91,9 +104,35 @@ public final class ItemTokenCodec {
         return frame(visibleFallback, MODE_TEXT, deflate(json));
     }
 
+    /**
+     * 组装「跨服缓存引用」模式 token：payload 仅为 8 字节内容哈希 id。物品 NBT 已通过
+     * {@code ItemCacheService} 走独立通道传输，接收端凭 id 回查本地缓存还原完整 tooltip。
+     *
+     * <p>体积恒定：8 字节 id → 零宽 36 字符（含模式头 9 字节 × 4）→ 线路约 108 字节，
+     * 与物品大小无关，永不撑爆数据包。id 不压缩（8 字节压缩无收益且可能变大）。</p>
+     *
+     * @param visibleFallback 未装插件方可见的纯文本回退
+     * @param cacheId         {@code ItemCacheService.hash(bytes)} 得到的内容哈希
+     */
+    public static Encoded encodeCacheRef(final String visibleFallback, final long cacheId) {
+        final byte[] id = new byte[8];
+        for (int i = 0; i < 8; i++) {
+            id[i] = (byte) (cacheId >>> (56 - i * 8));
+        }
+        return frameRaw(visibleFallback, MODE_CACHE_REF, id);
+    }
+
     /** 把压缩后的 body 加上模式头、零宽编码、包上哨兵，并算出线路字节。 */
     private static Encoded frame(final String visibleFallback, final byte mode, final byte[] compressedBody) {
-        final byte[] framed = withMode(mode, compressedBody);
+        return frameRaw(visibleFallback, mode, compressedBody);
+    }
+
+    /**
+     * 与 {@link #frame} 相同的封帧过程，但 body 已是最终字节（不再压缩）。
+     * CACHE_REF 的 8 字节 id 走这里，避免对短数据做无意义的 Deflate。
+     */
+    private static Encoded frameRaw(final String visibleFallback, final byte mode, final byte[] body) {
+        final byte[] framed = withMode(mode, body);
         final String zw = ZeroWidthCodec.encode(framed);
         final String token = SENTINEL_START + visibleFallback + SENTINEL_MID + zw + SENTINEL_END;
         return new Encoded(token, framed.length * 12);
@@ -116,17 +155,30 @@ public final class ItemTokenCodec {
                 return Optional.empty();
             }
             final byte mode = framed[0];
-            final byte[] compressedBody = new byte[framed.length - 1];
-            System.arraycopy(framed, 1, compressedBody, 0, compressedBody.length);
-            final byte[] body = inflate(compressedBody);
+            final byte[] rawBody = new byte[framed.length - 1];
+            System.arraycopy(framed, 1, rawBody, 0, rawBody.length);
+
+            // CACHE_REF 的 body 是未压缩的 8 字节 id，先于 inflate 分派。
+            if (mode == MODE_CACHE_REF) {
+                if (rawBody.length < 8) {
+                    return Optional.empty();
+                }
+                long id = 0;
+                for (int i = 0; i < 8; i++) {
+                    id = (id << 8) | (rawBody[i] & 0xFF);
+                }
+                return Optional.of(new Payload(MODE_CACHE_REF, null, null, id));
+            }
+
+            final byte[] body = inflate(rawBody);
             if (body == null) {
                 return Optional.empty();
             }
             if (mode == MODE_TEXT) {
                 final Component c = GSON.deserialize(new String(body, StandardCharsets.UTF_8));
-                return Optional.of(new Payload(MODE_TEXT, null, c));
+                return Optional.of(new Payload(MODE_TEXT, null, c, 0L));
             }
-            return Optional.of(new Payload(MODE_ITEM, ItemStack.deserializeBytes(body), null));
+            return Optional.of(new Payload(MODE_ITEM, ItemStack.deserializeBytes(body), null, 0L));
         } catch (final Exception ex) {
             return Optional.empty();
         }

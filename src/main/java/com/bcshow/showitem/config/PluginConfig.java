@@ -73,13 +73,17 @@ public final class PluginConfig {
     private final int maxItemWireBytes;
     private final int maxMessageWireBytes;
     private final boolean showAmountSuffix;
+    private final boolean crossServerCache;
+    private final int cacheMaxEntries;
+    private final int cacheTtlSeconds;
     private final boolean debug;
 
     private PluginConfig(final String triggerPrefix, final String triggerSuffix, final boolean hotbarEnabled,
                          final boolean slotSyntaxEnabled, final String displayFormat, final HoverMode hoverMode,
                          final EmptySlotAction emptySlotAction, final String emptySlotText,
                          final int maxItemsPerMessage, final int maxItemWireBytes, final int maxMessageWireBytes,
-                         final boolean showAmountSuffix, final boolean debug) {
+                         final boolean showAmountSuffix, final boolean crossServerCache, final int cacheMaxEntries,
+                         final int cacheTtlSeconds, final boolean debug) {
         this.triggerPrefix = triggerPrefix;
         this.triggerSuffix = triggerSuffix;
         this.hotbarEnabled = hotbarEnabled;
@@ -92,6 +96,9 @@ public final class PluginConfig {
         this.maxItemWireBytes = maxItemWireBytes;
         this.maxMessageWireBytes = maxMessageWireBytes;
         this.showAmountSuffix = showAmountSuffix;
+        this.crossServerCache = crossServerCache;
+        this.cacheMaxEntries = cacheMaxEntries;
+        this.cacheTtlSeconds = cacheTtlSeconds;
         this.debug = debug;
     }
 
@@ -116,6 +123,9 @@ public final class PluginConfig {
                 resolveItemWireBytes(config),
                 resolveMessageWireBytes(config),
                 config.getBoolean("show-amount-suffix", true),
+                config.getBoolean("cross-server-cache", true),
+                Math.max(64, config.getInt("cache-max-entries", 10000)),
+                Math.max(1, config.getInt("cache-ttl-seconds", 3600)),
                 "debug".equalsIgnoreCase(config.getString("log-level", "info")));
     }
 
@@ -205,6 +215,21 @@ public final class PluginConfig {
 
     public boolean showAmountSuffix() {
         return showAmountSuffix;
+    }
+
+    /** 是否启用跨服缓存档位（大物品走独立通道传输，消息只带引用 id）。 */
+    public boolean crossServerCache() {
+        return crossServerCache;
+    }
+
+    /** 本地缓存最多保留多少条物品（LRU 淘汰）。 */
+    public int cacheMaxEntries() {
+        return cacheMaxEntries;
+    }
+
+    /** 缓存条目存活秒数，超时后老消息 hover 失效。 */
+    public int cacheTtlSeconds() {
+        return cacheTtlSeconds;
     }
 
     public boolean debug() {
