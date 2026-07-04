@@ -228,20 +228,38 @@ public final class TriggerExpander {
     }
 
     /**
-     * 取物源：优先用「客户端实际收到的物品」（含附魔插件在发包时注入的显示层，所见即所得），
-     * 镜像未命中时回退背包本体 {@link SlotSelector#read}。
+     * 取物：真背包是<b>唯一权威内容源</b>，镜像仅作「显示装饰层」叠加。
      *
-     * <p>这解决了附魔插件的显示层不在物品本体 NBT 里、导致 {@code %i} 展示与游戏内不一致
-     * （附魔变英文、自定义附魔丢失）的问题。镜像是纯增强，缺省时行为与旧版一致。</p>
+     * <p><b>为什么不能直接信镜像</b>：镜像来自「服务端→客户端」的 SET_SLOT/WINDOW_ITEMS 出站包，
+     * 而 MC 1.17+ 背包点击是「客户端预测 + 服务端仅在预测不符时才纠正」。数字键快速换位等
+     * 客户端可自行预测的操作不会触发出站包，镜像收不到更新而陈旧，导致 {@code %2} 展示换位前
+     * 的旧物品。真背包 {@code getInventory().getItem()} 在点击包到达主线程时即更新，聊天时读它恒准。</p>
+     *
+     * <p><b>装饰生效条件</b>：镜像持有「客户端实际收到」的同一物品，含附魔插件在发包时注入、
+     * 不落在物品本体 NBT 的显示层（否则附魔变英文、自定义附魔丢失）。仅当镜像该槽与权威物品是
+     * <b>同一件物品</b>（类型 + 数量一致，见 {@link #sameItem}）时才采用其富显示版本；标识不符
+     * 说明该槽已被换过、镜像已陈旧，回落权威真背包。附魔显示照旧生效，换位后内容恒准。</p>
      */
     private ItemStack resolveItem(final Player player, final SlotSelector slot) {
-        if (mirror != null) {
-            final ItemStack seen = mirror.mirrored(player, slot.windowSlot(player));
-            if (!isEmpty(seen)) {
-                return seen;
-            }
+        final ItemStack base = slot.read(player);
+        if (isEmpty(base) || mirror == null) {
+            return base;
         }
-        return slot.read(player);
+        final ItemStack seen = mirror.mirrored(player, slot.windowSlot(player));
+        return sameItem(seen, base) ? seen : base;
+    }
+
+    /**
+     * 判定镜像物品与权威物品是否为「同一件物品」，用于决定镜像装饰层是否仍适用于当前槽位占据者。
+     *
+     * <p>附魔插件注入的只是显示名/lore，不改类型与数量，故用「类型 + 数量」作为轻量标识代理：
+     * 一致即认为镜像描述的仍是当前这件物品，其富显示版本可用；不一致（换位/整理/堆叠变动）
+     * 则镜像已陈旧。</p>
+     */
+    private static boolean sameItem(final ItemStack seen, final ItemStack base) {
+        return !isEmpty(seen)
+                && seen.getType() == base.getType()
+                && seen.getAmount() == base.getAmount();
     }
 
     /**
