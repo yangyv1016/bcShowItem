@@ -4,6 +4,7 @@ import com.bcshow.showitem.cache.ItemCacheService;
 import com.bcshow.showitem.config.PluginConfig;
 import com.bcshow.showitem.item.ItemDisplay;
 import com.bcshow.showitem.item.SlotSelector;
+import com.bcshow.showitem.render.InventoryMirrorService;
 import com.bcshow.showitem.token.ItemTokenCodec;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
@@ -30,14 +31,18 @@ public final class TriggerExpander {
 
     private final PluginConfig config;
     private final ItemCacheService cache;
+    private final InventoryMirrorService mirror;
 
     /**
      * @param config 配置快照
      * @param cache  跨服缓存服务；为 null 时禁用 CACHE 档位（AUTO 链跳过它）
+     * @param mirror 背包镜像服务；为 null 时取物直接用背包本体（不含附魔插件注入层）
      */
-    public TriggerExpander(final PluginConfig config, final ItemCacheService cache) {
+    public TriggerExpander(final PluginConfig config, final ItemCacheService cache,
+                           final InventoryMirrorService mirror) {
         this.config = config;
         this.cache = cache;
+        this.mirror = mirror;
     }
 
     /** 展开结果：替换后的文本 + 实际生成的 token 数量。 */
@@ -159,7 +164,7 @@ public final class TriggerExpander {
 
     private Rendered renderSlot(final Player player, final SlotSelector slot, final String rawTrigger,
                                 final int remainingWireBudget) {
-        final ItemStack item = slot.read(player);
+        final ItemStack item = resolveItem(player, slot);
         if (isEmpty(item)) {
             // 空槽位策略：keep=原样保留触发符文本，text=占位文本，remove=删除
             final String text = switch (config.emptySlotAction()) {
@@ -220,6 +225,23 @@ public final class TriggerExpander {
      * @param embedded  是否真正嵌入了物品数据（用于 maxItemsPerMessage 计数）
      */
     private record Rendered(String text, int wireBytes, boolean embedded) {
+    }
+
+    /**
+     * 取物源：优先用「客户端实际收到的物品」（含附魔插件在发包时注入的显示层，所见即所得），
+     * 镜像未命中时回退背包本体 {@link SlotSelector#read}。
+     *
+     * <p>这解决了附魔插件的显示层不在物品本体 NBT 里、导致 {@code %i} 展示与游戏内不一致
+     * （附魔变英文、自定义附魔丢失）的问题。镜像是纯增强，缺省时行为与旧版一致。</p>
+     */
+    private ItemStack resolveItem(final Player player, final SlotSelector slot) {
+        if (mirror != null) {
+            final ItemStack seen = mirror.mirrored(player, slot.windowSlot(player));
+            if (!isEmpty(seen)) {
+                return seen;
+            }
+        }
+        return slot.read(player);
     }
 
     private static boolean isEmpty(final ItemStack item) {

@@ -4,6 +4,7 @@ import com.bcshow.showitem.cache.ItemCacheService;
 import com.bcshow.showitem.chat.ChatCaptureListener;
 import com.bcshow.showitem.config.PluginConfig;
 import com.bcshow.showitem.render.ChatPacketInjector;
+import com.bcshow.showitem.render.InventoryMirrorService;
 import com.bcshow.showitem.render.ItemHoverRenderer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -25,6 +26,7 @@ public final class BcShowItemPlugin extends JavaPlugin {
     private final AtomicReference<PluginConfig> config = new AtomicReference<>();
     private ChatPacketInjector injector;
     private ItemCacheService cacheService;
+    private InventoryMirrorService mirrorService;
 
     @Override
     public void onEnable() {
@@ -41,7 +43,12 @@ public final class BcShowItemPlugin extends JavaPlugin {
         cacheService = new ItemCacheService(this, config::get);
         cacheService.register();
 
-        getServer().getPluginManager().registerEvents(new ChatCaptureListener(config::get, cacheService), this);
+        // 背包镜像：捕获「客户端实际收到的物品」（含附魔插件发包时注入的显示层），
+        // 让 %i 所见即所得，避免附魔显示成英文/自定义附魔丢失。
+        mirrorService = InventoryMirrorService.register(this);
+
+        getServer().getPluginManager().registerEvents(
+                new ChatCaptureListener(config::get, cacheService, mirrorService), this);
 
         final ItemHoverRenderer renderer = new ItemHoverRenderer(config::get, cacheService);
         injector = ChatPacketInjector.register(this, renderer);
@@ -61,6 +68,10 @@ public final class BcShowItemPlugin extends JavaPlugin {
         if (cacheService != null) {
             cacheService.unregister();
             cacheService = null;
+        }
+        if (mirrorService != null) {
+            mirrorService.unregister();
+            mirrorService = null;
         }
     }
 

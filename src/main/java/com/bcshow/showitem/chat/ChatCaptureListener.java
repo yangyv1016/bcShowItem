@@ -2,6 +2,7 @@ package com.bcshow.showitem.chat;
 
 import com.bcshow.showitem.cache.ItemCacheService;
 import com.bcshow.showitem.config.PluginConfig;
+import com.bcshow.showitem.render.InventoryMirrorService;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -21,10 +22,13 @@ public final class ChatCaptureListener implements Listener {
 
     private final Supplier<PluginConfig> configSupplier;
     private final ItemCacheService cache;
+    private final InventoryMirrorService mirror;
 
-    public ChatCaptureListener(final Supplier<PluginConfig> configSupplier, final ItemCacheService cache) {
+    public ChatCaptureListener(final Supplier<PluginConfig> configSupplier, final ItemCacheService cache,
+                               final InventoryMirrorService mirror) {
         this.configSupplier = configSupplier;
         this.cache = cache;
+        this.mirror = mirror;
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -33,7 +37,7 @@ public final class ChatCaptureListener implements Listener {
             return;
         }
         final PluginConfig config = configSupplier.get();
-        final TriggerExpander expander = new TriggerExpander(config, cache);
+        final TriggerExpander expander = new TriggerExpander(config, cache, mirror);
         final TriggerExpander.Result result = expander.expand(event.getPlayer(), event.getMessage());
         if (result.itemCount() > 0 || !result.message().equals(event.getMessage())) {
             event.setMessage(result.message());

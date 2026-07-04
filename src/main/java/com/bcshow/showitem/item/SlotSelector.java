@@ -19,10 +19,12 @@ import java.util.function.Function;
  *   <li>{@code 1..9} —— 快捷栏第 N 格（内部索引 0..8）</li>
  * </ul></p>
  *
- * @param reader   从玩家读取该槽位物品的函数
- * @param canonical 该槽位的规范名（用于日志/展示，可选）
+ * @param reader            从玩家读取该槽位物品本体的函数（保底回退用）
+ * @param windowSlotResolver 该槽位在玩家背包窗口中的槽位号解析器（供镜像回查所见即所得的物品）
+ * @param canonical         该槽位的规范名（用于日志/展示，可选）
  */
-public record SlotSelector(Function<Player, ItemStack> reader, String canonical) {
+public record SlotSelector(Function<Player, ItemStack> reader,
+                           Function<Player, Integer> windowSlotResolver, String canonical) {
 
     /**
      * 解析 selector 字符串。
@@ -40,8 +42,10 @@ public record SlotSelector(Function<Player, ItemStack> reader, String canonical)
             final char c = selector.charAt(0);
             if (c >= '1' && c <= '9') {
                 final int index = c - '1'; // '1' -> 索引 0
+                final int windowSlot = EquipmentSlotType.HOTBAR_WINDOW_BASE + index;
                 return Optional.of(new SlotSelector(
-                        player -> player.getInventory().getItem(index), "hotbar" + c));
+                        player -> player.getInventory().getItem(index),
+                        player -> windowSlot, "hotbar" + c));
             }
         }
 
@@ -50,11 +54,17 @@ public record SlotSelector(Function<Player, ItemStack> reader, String canonical)
     }
 
     private static SlotSelector fromEquipment(final EquipmentSlotType type) {
-        return new SlotSelector(type::read, type.name().toLowerCase(java.util.Locale.ROOT));
+        return new SlotSelector(type::read, type::windowSlot,
+                type.name().toLowerCase(java.util.Locale.ROOT));
     }
 
-    /** 读取该槽位物品，可能为 null / AIR。 */
+    /** 读取该槽位物品本体（保底），可能为 null / AIR。 */
     public ItemStack read(final Player player) {
         return reader.apply(player);
+    }
+
+    /** 该槽位在玩家背包窗口中的槽位号（供镜像回查所见即所得的物品）。 */
+    public int windowSlot(final Player player) {
+        return windowSlotResolver.apply(player);
     }
 }

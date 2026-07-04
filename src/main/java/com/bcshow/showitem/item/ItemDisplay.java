@@ -53,13 +53,18 @@ public final class ItemDisplay {
         if (config.showAmountSuffix() && item.getAmount() > 1) {
             name = Component.empty().append(name).append(Component.text(" x" + item.getAmount()));
         }
-        // 让物品名继承 {name} 处的激活颜色/样式（仅在名字本身未显式设置时填充）
-        name = applyIfAbsent(name, activeStyleAt(before));
+        // before 末尾的激活颜色/样式（如 &b[ 之后为 aqua）。name 与 after 都继承它：
+        //   name 处继承 → 物品名染上 aqua（仅在名字未显式设色时）
+        //   after 处继承 → 收尾的 ] 也染上 aqua，与左侧 [ 对称
+        // 若不给 after 补色，"&b[{name}]" 被切成三段独立反序列化后，"]" 会丢掉 before
+        // 的颜色上下文而落回默认白色，导致左右括号一蓝一白。
+        final Style activeStyle = activeStyleAt(before);
+        name = applyIfAbsent(name, activeStyle);
 
         return Component.empty()
                 .append(LEGACY.deserialize(before))
                 .append(name)
-                .append(LEGACY.deserialize(after));
+                .append(applyIfAbsent(LEGACY.deserialize(after), activeStyle));
     }
 
     /**
