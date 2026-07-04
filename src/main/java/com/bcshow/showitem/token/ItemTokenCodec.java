@@ -2,8 +2,11 @@ package com.bcshow.showitem.token;
 
 import org.bukkit.inventory.ItemStack;
 
+import java.io.ByteArrayOutputStream;
 import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.zip.Deflater;
+import java.util.zip.Inflater;
 
 /**
  * 物品 <-> 聊天 token 的无状态编解码器（隐写版）。
@@ -50,8 +53,18 @@ public final class ItemTokenCodec {
      * @return token 字符串
      */
     public static String encode(final String visibleFallback, final ItemStack item) {
-        final String zw = ZeroWidthCodec.encode(item.serializeAsBytes());
+        final String zw = ZeroWidthCodec.encode(deflate(item.serializeAsBytes()));
         return SENTINEL_START + visibleFallback + SENTINEL_MID + zw + SENTINEL_END;
+    }
+
+    /**
+     * 估算某物品编入 token 后在网络线路上占用的字节数（用于体积上限判断）。
+     *
+     * <p>膨胀链：压缩后字节数 {@code C} → 零宽字符 {@code 4C}（每字节 4 字符）→ UTF-8
+     * 线路字节 {@code 12C}（每个零宽码点 3 字节）。哨兵与可见回退名相对极小，此处忽略。</p>
+     */
+    public static int estimateWireBytes(final ItemStack item) {
+        return deflate(item.serializeAsBytes()).length * 12;
     }
 
     /**
@@ -62,7 +75,11 @@ public final class ItemTokenCodec {
      */
     public static Optional<ItemStack> decode(final String zwPayload) {
         try {
-            final byte[] bytes = ZeroWidthCodec.decode(zwPayload);
+            final byte[] compressed = ZeroWidthCodec.decode(zwPayload);
+            if (compressed == null) {
+                return Optional.empty();
+            }
+            final byte[] bytes = inflate(compressed);
             if (bytes == null) {
                 return Optional.empty();
             }
@@ -73,16 +90,50 @@ public final class ItemTokenCodec {
     }
 
     /**
-     * 估算物品序列化后的原始字节数（用于超限降级判断）。
-     */
-    public static int estimateBytes(final ItemStack item) {
-        return item.serializeAsBytes().length;
-    }
-
-    /**
      * 快速判断文本是否可能含 token（避免对每条消息都跑正则）。
      */
     public static boolean mayContainToken(final String text) {
         return text != null && text.indexOf(SENTINEL_START) >= 0;
+    }
+
+    /** 用 Deflate 压缩物品字节（NBT 文本冗余度高，通常可压到 30%~60%）。 */
+    private static byte[] deflate(final byte[] raw) {
+        final Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        try {
+            deflater.setInput(raw);
+            deflater.finish();
+            final ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, raw.length / 2));
+            final byte[] buf = new byte[4096];
+            while (!deflater.finished()) {
+                out.write(buf, 0, deflater.deflate(buf));
+            }
+            return out.toByteArray();
+        } finally {
+            deflater.end();
+        }
+    }
+
+    /** Deflate 逆操作。数据损坏返回 null。 */
+    private static byte[] inflate(final byte[] compressed) {
+        final Inflater inflater = new Inflater();
+        try {
+            inflater.setInput(compressed);
+            final ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, compressed.length * 2));
+            final byte[] buf = new byte[4096];
+            while (!inflater.finished()) {
+                final int n = inflater.inflate(buf);
+                if (n == 0) {
+                    if (inflater.needsInput() || inflater.needsDictionary()) {
+                        return null;
+                    }
+                }
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        } catch (final Exception ex) {
+            return null;
+        } finally {
+            inflater.end();
+        }
     }
 }

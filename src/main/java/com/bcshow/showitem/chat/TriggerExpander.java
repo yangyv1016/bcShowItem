@@ -46,6 +46,7 @@ public final class TriggerExpander {
         final StringBuilder out = new StringBuilder(message.length() + 64);
         int cursor = 0;
         int produced = 0;
+        int wireUsed = 0;
 
         while (cursor < message.length()) {
             final int hit = message.indexOf(prefix, cursor);
@@ -83,8 +84,11 @@ public final class TriggerExpander {
             }
 
             final String rawTrigger = message.substring(hit, parsed.end());
-            out.append(renderSlot(player, selector.get(), rawTrigger));
-            if (!isEmpty(selector.get().read(player))) {
+            final Rendered rendered = renderSlot(player, selector.get(), rawTrigger,
+                    config.maxMessageWireBytes() - wireUsed);
+            out.append(rendered.text());
+            wireUsed += rendered.wireBytes();
+            if (rendered.embedded()) {
                 produced++;
             }
             cursor = parsed.end();
@@ -145,22 +149,36 @@ public final class TriggerExpander {
         return null;
     }
 
-    private String renderSlot(final Player player, final SlotSelector slot, final String rawTrigger) {
+    private Rendered renderSlot(final Player player, final SlotSelector slot, final String rawTrigger,
+                                final int remainingWireBudget) {
         final ItemStack item = slot.read(player);
         if (isEmpty(item)) {
             // 空槽位策略：keep=原样保留触发符文本，text=占位文本，remove=删除
-            return switch (config.emptySlotAction()) {
+            final String text = switch (config.emptySlotAction()) {
                 case TEXT -> config.emptySlotText();
                 case REMOVE -> "";
                 case KEEP -> rawTrigger;
             };
+            return new Rendered(text, 0, false);
         }
-        if (ItemTokenCodec.estimateBytes(item) > config.maxItemBytes()) {
-            // 超大 NBT：降级为纯文本可见名，不嵌入数据（避免撑爆聊天包）
-            return ItemDisplay.plainFallback(item, config);
-        }
+        final int wire = ItemTokenCodec.estimateWireBytes(item);
         final String fallback = ItemDisplay.plainFallback(item, config);
-        return ItemTokenCodec.encode(fallback, item);
+        // 超单物品上限，或超出本条消息剩余总预算：降级为纯文本（无 hover），
+        // 但绝不产生会撑爆 32767 字节包上限的零宽数据。
+        if (wire > config.maxItemWireBytes() || wire > remainingWireBudget) {
+            return new Rendered(fallback, 0, false);
+        }
+        return new Rendered(ItemTokenCodec.encode(fallback, item), wire, true);
+    }
+
+    /**
+     * 单个 selector 的渲染结果。
+     *
+     * @param text      写入消息的文本（token 或纯文本回退）
+     * @param wireBytes 本次嵌入占用的线路字节（降级为纯文本时为 0）
+     * @param embedded  是否真正嵌入了物品数据（用于 maxItemsPerMessage 计数）
+     */
+    private record Rendered(String text, int wireBytes, boolean embedded) {
     }
 
     private static boolean isEmpty(final ItemStack item) {

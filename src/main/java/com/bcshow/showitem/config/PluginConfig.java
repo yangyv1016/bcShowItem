@@ -45,15 +45,16 @@ public final class PluginConfig {
     private final EmptySlotAction emptySlotAction;
     private final String emptySlotText;
     private final int maxItemsPerMessage;
-    private final int maxItemBytes;
+    private final int maxItemWireBytes;
+    private final int maxMessageWireBytes;
     private final boolean showAmountSuffix;
     private final boolean debug;
 
     private PluginConfig(final String triggerPrefix, final String triggerSuffix, final boolean hotbarEnabled,
                          final boolean slotSyntaxEnabled, final String displayFormat,
                          final EmptySlotAction emptySlotAction, final String emptySlotText,
-                         final int maxItemsPerMessage, final int maxItemBytes, final boolean showAmountSuffix,
-                         final boolean debug) {
+                         final int maxItemsPerMessage, final int maxItemWireBytes, final int maxMessageWireBytes,
+                         final boolean showAmountSuffix, final boolean debug) {
         this.triggerPrefix = triggerPrefix;
         this.triggerSuffix = triggerSuffix;
         this.hotbarEnabled = hotbarEnabled;
@@ -62,7 +63,8 @@ public final class PluginConfig {
         this.emptySlotAction = emptySlotAction;
         this.emptySlotText = emptySlotText;
         this.maxItemsPerMessage = maxItemsPerMessage;
-        this.maxItemBytes = maxItemBytes;
+        this.maxItemWireBytes = maxItemWireBytes;
+        this.maxMessageWireBytes = maxMessageWireBytes;
         this.showAmountSuffix = showAmountSuffix;
         this.debug = debug;
     }
@@ -84,7 +86,8 @@ public final class PluginConfig {
                 EmptySlotAction.of(config.getString("empty-slot-action", "keep")),
                 config.getString("empty-slot-text", "&7[空]"),
                 Math.max(1, config.getInt("max-items-per-message", 5)),
-                Math.max(64, config.getInt("max-item-bytes", 8192)),
+                resolveItemWireBytes(config),
+                resolveMessageWireBytes(config),
                 config.getBoolean("show-amount-suffix", true),
                 "debug".equalsIgnoreCase(config.getString("log-level", "info")));
     }
@@ -98,6 +101,35 @@ public final class PluginConfig {
             return legacy.substring(0, legacy.length() - 1);
         }
         return "%";
+    }
+
+    /**
+     * 单个物品的线路字节上限。优先读新键 {@code max-item-wire-bytes}；
+     * 未配置时兼容旧键 {@code max-item-bytes}（旧值是「原始字节」语义，
+     * 按 12 倍膨胀折算成线路字节，避免沿用旧配置仍踢人）。
+     */
+    private static int resolveItemWireBytes(final FileConfiguration config) {
+        if (config.isInt("max-item-wire-bytes")) {
+            return clampWire(config.getInt("max-item-wire-bytes"));
+        }
+        if (config.isInt("max-item-bytes")) {
+            return clampWire(config.getInt("max-item-bytes") * 12);
+        }
+        return 6000;
+    }
+
+    /** 单条消息所有物品合计的线路字节预算。 */
+    private static int resolveMessageWireBytes(final FileConfiguration config) {
+        return clampWire(config.getInt("max-message-wire-bytes", 20000));
+    }
+
+    /**
+     * 夹取到安全区间：下限 512（太小则几乎所有物品都降级），
+     * 上限 24000（为 VC/Bungee plugin message 头部、其他文本与 §JSON 结构留出余量，
+     * 硬上限是 32767）。
+     */
+    private static int clampWire(final int v) {
+        return Math.max(512, Math.min(24000, v));
     }
 
     public String triggerPrefix() {
@@ -132,8 +164,12 @@ public final class PluginConfig {
         return maxItemsPerMessage;
     }
 
-    public int maxItemBytes() {
-        return maxItemBytes;
+    public int maxItemWireBytes() {
+        return maxItemWireBytes;
+    }
+
+    public int maxMessageWireBytes() {
+        return maxMessageWireBytes;
     }
 
     public boolean showAmountSuffix() {
