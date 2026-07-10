@@ -109,7 +109,17 @@ public final class ChatPacketInjector extends PacketAdapter {
         if (wrapped == null) {
             return;
         }
-        final String json = wrapped.getJson();
+        final String json;
+        try {
+            json = wrapped.getJson();
+        } catch (final NullPointerException ex) {
+            if (String.valueOf(ex.getMessage()).contains("PARTIAL_RESULT_MESSAGE_ACCESSOR")) {
+                // Paper 1.21.11 + ProtocolLib 5.3.0 对部分原生系统消息序列化会失败。
+                // 此时还没确认含本插件 token，按非 ShowItem 消息放行，避免死亡消息等系统广播刷警告。
+                return;
+            }
+            throw ex;
+        }
         if (json == null || !ItemTokenCodec.mayContainToken(json)) {
             return;
         }
